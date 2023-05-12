@@ -1,0 +1,141 @@
+@compiler >= 6
+
+include "String.aes"
+
+contract interface Collection =
+    entrypoint owner : (int) => option(address)
+    stateful entrypoint approve : (address, int, bool) => unit
+    stateful entrypoint transfer : (address, int, option(string)) => unit
+
+payable contract MarketPlace =
+
+    record state = {
+        listings : map(nft, (int * address)),
+        offers : map(nft, (int * address))
+        }
+
+    record nft = {
+        token_id : int,
+        collection : Collection}
+
+    datatype event =
+        Listing(address, int, int)
+        | Cancel(address, int, int)
+        | Offer(address, int, int)
+        | Trade(address, int, int)
+        | Withdraw(address, int)
+
+    stateful entrypoint init() = 
+        { listings = {},
+            offers = {} }
+    
+    entrypoint balance() : int =
+        Contract.balance
+ 
+    stateful entrypoint put_listing(col : Collection, token_id : int, ref_price : int) =
+        let new_nft : nft = {
+            token_id = token_id,
+            collection = col}
+
+        switch(col.owner(token_id))
+            None => abort("NOT_OWNED")
+            Some(owner) =>
+                require(Call.caller == owner, "INVALID_OWNER")
+                switch(Map.lookup(new_nft, state.listings))
+                    None => 
+                        Chain.event(Listing(col.address, token_id, ref_price))
+                        put(state{ listings[new_nft] = (ref_price, Call.caller) })
+                    Some((_, _)) =>
+                        abort("ALREADY_LISTED")
+
+    stateful entrypoint get_listing(col : Collection, token_id : int) : option((int * address)) =
+        let nft : nft = {
+            token_id = token_id,
+            collection = col}
+
+        Map.lookup(nft, state.listings)
+
+    stateful entrypoint get_listings() : map(nft, (int * address)) =
+        state.listings
+
+    stateful entrypoint cancel_listing(col : Collection, token_id : int) =
+        let nft : nft = {
+            token_id = token_id,
+            collection = col}
+
+        switch(Map.lookup(nft, state.listings))
+            None => abort("LISTING_NOT_FOUND")
+            Some((ref_price, seller)) =>
+                require(Call.caller == seller, "INVALID_OWNER")
+                switch(Map.lookup(nft, state.offers))
+                    None => 
+                        do_cancel_listing(nft, ref_price)
+                    Some((bid_value, buyer)) =>
+                        Chain.spend(buyer, bid_value)
+                        put(state{ offers = Map.delete(nft, state.offers) })
+                        do_cancel_listing(nft, ref_price)
+
+    payable stateful entrypoint put_offer(col : Collection, token_id : int) =
+        let nft : nft = {
+            token_id = token_id,
+            collection = col}
+
+        switch(Map.lookup(nft, state.listings))
+            None => abort("LISTING_NOT_FOUND")
+            Some((ref_price, _)) =>
+                require(Call.value > ref_price / 2, "INSUFFICIENT_BID")
+                switch(Map.lookup(nft, state.offers))
+                    None => 
+                        do_put_offer(nft, Call.value, Call.caller)
+                    Some((prev_bid, prev_buyer)) =>
+                        require(Call.value > prev_bid, "INSUFFICIENT_BID")
+                        Chain.spend(prev_buyer, prev_bid)
+                        do_put_offer(nft, Call.value, Call.caller)
+
+    stateful entrypoint withdraw_offer(col : Collection, token_id : int) =
+        let nft : nft = {
+            token_id = token_id,
+            collection = col}
+
+        switch(Map.lookup(nft, state.offers))
+            None => abort("NO_BID_FOUND")
+            Some((bid_value, buyer)) =>
+                require(Call.caller == buyer, "NOT_ALLOWED")
+                Chain.spend(Call.caller, bid_value)
+                Chain.event(Withdraw(Call.caller, bid_value))
+                put(state{ offers = Map.delete(nft, state.offers) })
+                    
+    entrypoint get_offer(col : Collection, token_id : int) : option((int * address)) =
+        let nft : nft = {
+            token_id = token_id,
+            collection = col}
+        
+        switch(Map.lookup(nft, state.listings))
+            None => abort("LISTING_NOT_FOUND")
+            Some((ref_price, _)) => Map.lookup(nft, state.offers)
+
+    stateful entrypoint accept_offer(col : Collection, token_id : int) =
+        let nft : nft = {
+            token_id = token_id,
+            collection = col}
+
+        switch(Map.lookup(nft, state.listings))
+            None => abort("LISTING_NOT_FOUND")
+            Some((_, owner)) =>
+                require(Call.caller == owner, "NOT_ALLOWED")
+                switch(Map.lookup(nft, state.offers))
+                    None => abort("NO_BID_FOUND")
+                    Some((bid_value, buyer)) =>
+                        Chain.spend(Call.caller, bid_value)
+                        col.transfer(buyer, token_id, None)
+                        Chain.event(Trade(col.address, token_id, bid_value))
+                        put(state{ listings = Map.delete(nft, state.listings) })
+                        put(state{ offers = Map.delete(nft, state.offers) })
+
+    stateful function do_cancel_listing(nft, ref_price) =
+        Chain.event(Cancel(nft.collection.address, nft.token_id, ref_price))
+        put(state{ listings = Map.delete(nft, state.listings) })
+
+    stateful function do_put_offer(nft, value, caller) =
+        Chain.event(Offer(nft.collection.address, nft.token_id, value))
+        put(state{ offers[nft] = (value, caller) })
