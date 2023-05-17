@@ -48,14 +48,14 @@ payable contract MarketPlace =
                     Some((_, _)) =>
                         abort("ALREADY_LISTED")
 
-    stateful entrypoint get_listing(col : Collection, token_id : int) : option((int * address)) =
+    entrypoint get_listing(col : Collection, token_id : int) : option((int * address)) =
         let nft : nft = {
             token_id = token_id,
             collection = col}
 
         Map.lookup(nft, state.listings)
 
-    stateful entrypoint get_listings() : map(nft, (int * address)) =
+    entrypoint get_listings() : map(nft, (int * address)) =
         state.listings
 
     stateful entrypoint cancel_listing(col : Collection, token_id : int) =
@@ -113,6 +113,9 @@ payable contract MarketPlace =
         switch(Map.lookup(nft, state.listings))
             None => abort("LISTING_NOT_FOUND")
             Some((ref_price, _)) => Map.lookup(nft, state.offers)
+
+    entrypoint get_offers() : map(nft, (int * address)) =
+        state.offers
 
     stateful entrypoint accept_offer(col : Collection, token_id : int) =
         let nft : nft = {
