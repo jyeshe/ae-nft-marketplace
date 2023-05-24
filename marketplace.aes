@@ -130,7 +130,7 @@ payable contract MarketPlace =
                     None => abort("NO_BID_FOUND")
                     Some((bid_value, buyer)) =>
                         Chain.spend(Call.caller, bid_value)
-                        col.transfer(buyer, token_id, None)
+                        col.transfer(buyer, token_id, None, protected = true)
                         Chain.event(Trade(col.address, token_id, bid_value))
                         put(state{ listings = Map.delete(nft, state.listings) })
                         put(state{ offers = Map.delete(nft, state.offers) })
