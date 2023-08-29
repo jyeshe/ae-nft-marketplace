@@ -11,7 +11,10 @@ payable contract MarketPlace =
 
     record state = {
         listings : map(nft, (int * address)),
-        offers : map(nft, (int * address))
+        offers : map(nft, (int * address)),
+        moderators : list(address),
+        allowedCols : map(address, address),
+        blockedCols : map(address, address)
         }
 
     record nft = {
@@ -25,14 +28,35 @@ payable contract MarketPlace =
         | Trade(address, int, int)
         | Withdraw(address, int)
 
-    stateful entrypoint init() = 
-        { listings = {},
-            offers = {} }
-    
+    stateful entrypoint init(mods : list(address)) =
+        { listings = {}, 
+            offers = {}, 
+            moderators = mods,
+            allowedCols = {}, 
+            blockedCols = {} }
+
     entrypoint balance() : int =
         Contract.balance
  
+    stateful payable entrypoint allow_collection(col : Collection) =
+        if(false == List.contains(Call.caller, state.moderators))
+            require(Call.value >= 1000000000000000000, "LOW_VALUE_COLLECTION_NOT_ALLOWED")
+
+        do_allow_collection(col)
+                
+    stateful entrypoint block_collection(col : Collection) =
+        require(List.contains(Call.caller, state.moderators), "NOT ALLOWED")
+        put(state{ 
+            blockedCols[col.address] = Call.caller,
+            allowedCols = Map.delete(col.address, state.allowedCols) })
+
+    stateful entrypoint withdraw(to : address) =
+        require(List.contains(Call.caller, state.moderators), "NOT ALLOWED")
+        Chain.spend(to, Contract.balance)
+
     stateful entrypoint put_listing(col : Collection, token_id : int, ref_price : int) =
+        require_allowed_collection(col)
+
         let new_nft : nft = {
             token_id = token_id,
             collection = col}
@@ -134,6 +158,11 @@ payable contract MarketPlace =
                         Chain.event(Trade(col.address, token_id, bid_value))
                         put(state{ listings = Map.delete(nft, state.listings) })
                         put(state{ offers = Map.delete(nft, state.offers) })
+            
+    // helper functions            
+    stateful function do_allow_collection(col : Collection) = 
+        put(state{ allowedCols[col.address] = Call.caller,
+            blockedCols = Map.delete(col.address, state.blockedCols) })
 
     stateful function do_cancel_listing(nft, ref_price) =
         Chain.event(Cancel(nft.collection.address, nft.token_id, ref_price))
@@ -142,3 +171,7 @@ payable contract MarketPlace =
     stateful function do_put_offer(nft, value, caller) =
         Chain.event(Offer(nft.collection.address, nft.token_id, value))
         put(state{ offers[nft] = (value, caller) })
+
+    // require
+    function require_allowed_collection(col : Collection) =
+        require(Map.lookup(col.address, state.allowedCols) != None, "COLLECTION_NOT_ALLOWED")
